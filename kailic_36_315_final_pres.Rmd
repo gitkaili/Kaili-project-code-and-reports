@@ -1,0 +1,259 @@
+---
+title: "Beijing Traded House between 2002 and 2018"
+author: |
+  | Kaili Chen
+subtitle: |
+  | Final presentation
+  | 36-315 Statistical Graphics and Visualization
+  | Carnegie Mellon University
+output:
+  beamer_presentation:
+    includes:
+      colortheme: dove
+      fig_caption: no
+      in_header: slide_edits.txt
+      theme: Pittsburgh
+  ioslides_presentation: default
+  slidy_presentation: default
+---
+
+```{r, echo=FALSE, warning=F, message=F}
+###########################
+# DEFAULT SETTINGS
+###########################
+knitr::opts_chunk$set(message = FALSE) # include this if you don't want markdown to knit messages
+knitr::opts_chunk$set(warning = FALSE) # include this if you don't want
+###########################
+# LIBRARIES
+###########################
+library(tidyverse)
+library(pander)
+library(kableExtra)
+library(knitr)
+library(gridExtra)
+# TO LOAD IN DATA FROM LOCAL FILES
+# Save the data .csv to an appropriate folder on your computer
+# Relace the following path with the correct path for *your* computer / file
+beijing_original <- read_csv("/Users/kailichen/Documents/Carnegie\ Mellon\ University/Statistical\ Graphics\ and\ Visualization\ 315/Beijing/beijing\ housing\ price.csv")
+
+beijing <- beijing_original %>% select(., Lng, Lat, subway, district, 
+                              totalPrice, price, square, 
+                              tradeTime, constructionTime, 
+                              buildingStructure, buildingType, 
+                              elevator,floor, ladderRatio,
+                              renovationCondition, livingRoom,
+                              drawingRoom, kitchen, bathRoom)
+                              
+
+beijing <- na.omit(beijing)
+
+beijing <- beijing %>% mutate(
+  subway = fct_recode(factor(subway),
+                        "Yes" = "1",
+                        "No" = "0"),
+  elevator = fct_recode(factor(elevator),
+                        "Yes" = "1",
+                        "No" = "0"),
+  buildingType = fct_recode(factor(buildingType),
+                            "tower" = "1",
+                            "bungalow" = "2",
+                            "plate & tower" = "3",
+                            "plate" = "4"),
+  renovationCondition = fct_recode(factor(renovationCondition),
+                                   "Hardcover" = "4",
+                                   "Simplicity" = "3",
+                                   "Rough" = "2",
+                                   "Other" = "1"
+                                   ),
+  buildingStructure = fct_recode(factor(buildingStructure),
+                                 "unknown" = "1",
+                                 "mixed" = "2",
+                                 "brick and wood" = "3",
+                                 "brick and concrete" = "4",
+                                 "steel" = "5",
+                                 "steel-concrete composite" = "6"),
+  district = fct_recode(factor(district),
+                        "Dongcheng" = "1",
+                        "Fengtai" = "2",
+                        "Tongzhou" = "3",
+                        "Daxing" = "4",
+                        "Fangshan" = "5",
+                        "Changping" = "6",
+                        "Chaoyang" = "7",
+                        "Haidian" = "8",
+                        "Shijingshan" = "9",
+                        "Xicheng" = "10",
+                        "Pinggu" = "11",
+                        "Mentougou" = "12",
+                        "Shunyi" = "13"))
+
+beijing$location = fct_recode(factor(beijing$district),
+                   "Central District" = "Dongcheng",
+                   "Central District" = "Xicheng",
+                   "Middle" = "Chaoyang",
+                   "Middle" = "Fengtai",
+                   "Middle" = "Shijingshan",
+                   "Middle" = "Haidian",
+                   "Suburb" = "Daxing",
+                   "Suburb" = "Fangshan",
+                   "Suburb" = "Tongzhou",
+                   "Suburb" = "Changping",
+                   "Suburb" = "Pinggu",
+                   "Suburb" = "Mentougou",
+                   "Suburb" = "Shunyi")
+
+beijing$totalPrice = beijing$totalPrice * 10000 / 1000
+```
+
+
+## Introduction
+
+![Top two populous cities in China & in the World](population density.png)
+
+## Variables Interested
+
+| Column Name         |  Description |
+:--------------:|:-----------------------------------------------------:
+Lng | longitude coordinates
+Lat | latitude coordinates
+totalPrice | the total price(¥)
+price | the price of the house (¥/$m^2$)
+square | the area of house ($m^2$)
+elevator | has an elevator in the building or not
+subway | located close to the subway or not
+location | central district, middle, or suburb
+renovationCondition | hardcover, simplicity, rough, and other
+buildingStructure | brick and wood, brick and concrete, steel, steel-concrete composite, mixed, unknown
+buildingType | tower, plate&tower, plate, and bungalow
+
+
+## Different Building Types
+
+![Building Types](buildingTypes.JPG)
+
+
+## Subway and Housing Price
+
+```{r, echo = FALSE, fig.height=4, fig.width=6}
+my_theme <- theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 18),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        legend.title = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        strip.text = element_text(size = 14))
+
+subway_price <- ggplot(beijing, aes(x = subway, y = price)) +
+                geom_violin() + 
+                geom_boxplot(width = 0.25) + 
+                labs(x = "Whether the house is close to subway",
+                     y = "Unit Price (¥/m^2)",
+                     title = "Unit Price and Subway") + 
+                     theme(plot.title = element_text(hjust = 0.5, size = 14),
+                     axis.title = element_text(size = 10),
+                     axis.text = element_text(size = 12),
+                     legend.title = element_text(size = 12),
+                     legend.text = element_text(size = 10),
+                     strip.text = element_text(size = 14))
+
+subway_totalprice <- ggplot(beijing, aes(x = subway, y = totalPrice)) +
+                     geom_violin() + 
+                     geom_boxplot(width = 0.25) +
+                     labs(x = "Whether the house is close to subway",
+                     y = "Total Price (k, ¥)",
+                     title = "Total Price and Subway") + 
+                     theme(plot.title = element_text(hjust = 0.5, size = 14),
+                     axis.title = element_text(size = 10),
+                     axis.text = element_text(size = 12),
+                     legend.title = element_text(size = 12),
+                     legend.text = element_text(size = 10),
+                     strip.text = element_text(size = 14))
+
+grid.arrange(subway_price, subway_totalprice, nrow = 1)
+```
+
+## Renovation Conditions in different areas of Beijing
+
+```{r, echo = FALSE}
+ggplot(beijing, 
+       aes(x = renovationCondition, 
+           fill = as.factor(renovationCondition))) + 
+  geom_bar(position = "dodge") + 
+  facet_grid(location ~ . ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(x = "Renovation Condition",
+       y = "Number of Traded Houses",
+       title = "Renovation Condition vs Location",
+       fill = "Renovation Condition") +
+       theme(plot.title = element_text(hjust = 0.5, size = 22),
+       axis.title = element_text(size = 16),
+       axis.text = element_text(size = 13),
+       legend.title = element_text(size = 12),
+       legend.text = element_text(size = 10),
+       strip.text = element_text(size = 18)) 
+```
+
+## Building Structure
+
+```{r, echo = FALSE, cache = T, autodep= T}
+library(ggmap)
+
+beijing_coord <- c(bottom = 39.35 + 0.25, left = 115 + 0.25, 
+                   top = 41 - 0.25, right = 118 - 0.25)
+
+map_base <- get_stamenmap(beijing_coord, maptype = "toner-lite", zoom = 8)
+
+map_object <- ggmap(map_base, extent = "device")
+
+beijing_tower <- beijing %>% filter(. , buildingType == "tower")
+
+map_object + geom_point(aes(x = Lng, y = Lat, color = buildingStructure),  
+                        data = beijing, alpha = 0.4, size = 0.2) +
+             labs(x = "",
+                  y = "",
+                  title = "Building Structure of Traded Houses in Beijing",
+                  color = "Building Structures") + 
+                  facet_wrap(. ~ buildingStructure, ncol = 3, nrow = 2) + 
+                  theme(plot.title = element_text(hjust = 0.5, size = 22),
+                  axis.title = element_text(size = 10),
+                  axis.text = element_text(size = 8),
+                  legend.title = element_text(size = 12),
+                  legend.text = element_text(size = 10),
+                  strip.text = element_text(size = 18)) + 
+                  theme(legend.position = "none")
+```
+
+## Building Types
+
+```{r, echo=FALSE}
+map_object + geom_point(aes(x = Lng, y = Lat, color = buildingType),  
+                        data = beijing, alpha = 0.1, size = 0.05) +
+             labs(x = "",
+                  y = "",
+                  title = "Building Types of Traded Houses in Beijing",
+                  color = "Building Types") + 
+                  facet_wrap(. ~ buildingType, ncol = 2, nrow = 2) + 
+                  theme(plot.title = element_text(hjust = 0.5, size = 22),
+                  axis.title = element_text(size = 10),
+                  axis.text = element_text(size = 8),
+                  legend.title = element_text(size = 12),
+                  legend.text = element_text(size = 10),
+                  strip.text = element_text(size = 18)) + 
+                  theme(legend.position = "none")
+```
+
+## Results & Discussion
+
++ Houses located near subway on average have higher unit price and total price than houses not near the subway. 
+
++ Very few houses have the building structure of `steel` and `brick and wood`. Houses made of brick and wood are concentrated in the center of Beijing. 
+
++ Except bungalow which is concentrated in the center of Beijing, houses of other building types are pretty spread out across different regions in Beijing.
+
++ Limitation: look at other variables included in the original dataset such as constructionTime and tradeTime, maybe do a time series plot.
+
+
+## Future directions
+
+
+![Hutong](hutong.jpg)
