@@ -1,0 +1,527 @@
+---
+title: "Analysis_2"
+author: "Jingyan Xu"
+date: "7/15/2019"
+output: html_document
+---
+Code Updates on August 2:
+1. Added lm output for downloads ~ deviance
+2. Updated sample method by weighting downloads, so that sample is representative of 
+downloads distribution in the original population.
+3. Created extract_downloads function based on previous code, now it creates a dataframe containing bookid and corresponding number of download for each book
+4. Added movies_count variable by joining sample_english_books with movies dataset from Kaggle.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rvest)
+for (idx in 1:1){
+  print(paste("https://www.gutenberg.org/ebooks/",idx,sep=""))
+  webpage <- read_html(paste("https://www.gutenberg.org/ebooks/",idx,sep=""))
+  results <- webpage %>% html_nodes(".bibrec")
+  dat <- results %>% html_nodes("td")  %>% html_text()
+  dat <- strsplit(dat, "\n")
+  number <- grep(" downloads",dat)
+  result <- strsplit(dat[number][[1]][1]," ")[[1]][1]
+  print(result)
+}
+
+# library(gutenbergr)d
+# dat <- gutenberg_download(gutenberg_works()$gutenberg_id[1:500], meta_fields = "title")
+# dat
+```
+
+
+```{r}
+# library(gutenbergr)
+# set.seed(0)
+# dat <- gutenberg_download(gutenberg_works()$gutenberg_id[1:1000], meta_fields = "title")
+```
+
+```{r}
+library(tidyverse)
+library(gutenbergr)
+library(dplyr)
+library(tidytext)
+library(tidyr)
+library(purrr)
+library(sylcount)
+library(rvest)
+library(ggplot2)
+library(pander)
+```
+
+
+```{r}
+# set.seed(0)
+# count the number of syllables per sentence
+syl_count_sentence <- function(ortho) {
+ # Can add words to these lists of 2 syllable and 3 syllable 'exceptions'
+ # Note that final -e is stripped before checking these lists!
+ Specials.2 <- c('every', 'different', 'family', 'girl', 'girls', 'world', 'worlds', 'bein', 'being', 'something', 'mkay', 'mayb')
+ Specials.3 <- c('anyon', 'everyon') # final -e is dropped 
+ 
+ # Regular Expression exceptions
+ # SubSyl - remove a syllable from the count for each sub-string match
+ SubSyl <- c('cial',
+       'tia',
+          'cius',
+       'cious',
+      'giu',              # belgium!
+      'ion',
+      'iou',
+      '^every',           # every, but also everything, everybody
+      'sia$',
+      '.ely$',            # absolutely! (but not ely!)
+      '[^szaeiou]es$',    # fates, but not sasses
+      '[^tdaeiou]ed$',    # trapped, but not fated
+      '^ninet',           # nineteen, ninety
+      '^awe'    # awesome
+        )
+
+ # AddSyl - add a syllable to the count for each sub-string match
+ AddSyl <- c('ia',
+       'rie[rt]',
+      'dien',
+     'ieth',
+     'iu',
+     'io',
+     'ii',
+     'ienc',       # ambience, science, ...
+     'les?$',
+     '[aeiouym][bp]l$',  # -Vble, plus -mble and -Vple
+     '[aeiou]{3}',       # agreeable
+     'ndl(ed)?$',        # handle, handled
+     'mpl(ed)?$',     # trample, trampled
+    '^mc',    # McEnery
+     'ism$',             # -isms
+     '([^aeiouy])\\1l(ed)?$',  # middle twiddle battle bottle, etc.
+     '[^l]lien',         # alien, salient [1]
+     '^coa[dglx].',      # [2]
+     '[^gq]ua[^aeiou]',  # i think this fixes more than it breaks
+     '[sd]nt$',          # couldn't, didn't, hasn't, wasn't,...
+     '\\wshes$',          # add one back for esh (since it's -'d)
+     '\\wches$',          #  and for affricate (witches)
+     '\\wges$',           #  and voiced (ages)
+     '\\wces$',       #  and sibilant 'c's (places)
+     '\\w[aeiouy]ing[s]?$'   # vowels before -ing = hiatus
+        )
+    
+ tot_syls <- 0
+ ortho.l <- tolower(ortho)
+ stripchars <- "[:'\\[\\]]"
+ ortho.cl <- gsub(stripchars, "", ortho.l, perl=T)
+ spacechars <- "[\\W_]" # replace other non-word chars with space
+ ortho.cl <- gsub(spacechars, " ", ortho.cl, perl=T)
+ ortho.vec <- unlist(strsplit(ortho.cl, " ", perl=T))
+ ortho.vec <- ortho.vec[ortho.vec!=""]
+ for (w in ortho.vec) {
+  w <- gsub("e$", "", w, perl=T) # strip final -e
+  syl <- 0
+  # is word in the 2 syllable exception list?
+  if (w %in% Specials.2) {
+   syl <- 2
+  
+  # is word in the 3 syllable exception list?
+  } else if (w %in% Specials.3) {
+   syl <- 3
+   
+  # if not, than check the different parts...
+  } else {
+   for (pat in SubSyl) {
+    if (length(grep(pat, w, perl=T))>=1) 
+     syl <- syl - 1
+   }
+   for (pat in AddSyl) {
+    if (length(grep(pat, w, perl=T))>=1) 
+     syl <- syl + 1
+   }
+   if (nchar(w)==1) {
+    syl <- 1
+   } else {
+    chnk <- unlist(strsplit(w, "[^aeiouy:]+"))
+    chnk <- chnk[chnk!=""]
+    syl <- syl + length(chnk)
+    if (syl==0) syl <- 1
+   }
+  }
+  tot_syls <- tot_syls + syl
+ }
+ tot_syls
+}
+```
+
+```{r}
+# Scrape number of downloads from gutenberg based on bookid
+extract_downloads <- function(gutenbergid){
+  downloads = NULL
+  titles = NULL
+  download_data = NULL
+  for (idx in gutenbergid){
+    webpage <- read_html(paste("https://www.gutenberg.org/ebooks/", idx, sep=""))
+    results <- webpage %>% html_nodes(".bibrec")
+    dat <- results %>% html_nodes("td")  %>% html_text()
+    dat <- strsplit(dat, "\n")
+    number <- grep(" downloads", dat)
+    downloads <- append(downloads, strsplit(dat[number][[1]][1], " ")[[1]][1])
+    titles <- append(titles, dat[[2]][2])
+    download_data = data.frame(downloads = as.numeric(downloads), title = titles)
+  }
+  return(download_data)
+}
+
+# Get all English books on Gutenberg with complete info
+english_books <- gutenberg_metadata %>% 
+  filter(., (language == "en") & has_text == TRUE) %>% 
+  na.omit() %>% 
+  sample_n(., 20)
+# Extract downloads data and add to the original data frame
+english_books_downloads <- english_books %>% 
+  mutate(., downloads =
+         extract_downloads(english_books$gutenberg_id)[ , "downloads"])
+# Sample 1000 English books based on downloads
+sample_english_books <- english_books_downloads %>% na.omit() %>% 
+  sample_n(., 18, weight = downloads, replace = FALSE)
+```
+
+```{r}
+# Downloads ~ SMOG
+# demo https://www.r-bloggers.com/measuring-gobbledygook/
+
+books <- gutenberg_download(sample_english_books$gutenberg_id, 
+                            meta_fields = "title")
+tidybooks <- books %>%
+    mutate(text = iconv(text, to = 'latin1')) %>%
+    nest(-title) %>%
+    mutate(tidied = map(data, unnest_tokens, 'sentence', 'text', token = 'sentences'))
+
+tidybooks <- tidybooks %>%
+    unnest(tidied)
+
+tidybooks %>%
+    group_by(title) %>%
+    summarise(n_sentences = n_distinct(sentence))
+
+tidy_books <- books %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+
+####
+tidy_books %>%
+  count(word, sort = TRUE) 
+
+word_count_book <- tidy_books %>%
+  group_by(title) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+large_dat <- word_count_book
+####
+
+
+syl_count_sentence <- function(sentence){
+  return (sum(sylcount(sentence)[[1]]))
+}
+
+tidybooks <- tidybooks %>%
+    unnest_tokens(word, sentence, drop = FALSE) %>%
+    rowwise() %>%
+    mutate(n_syllables = syl_count_sentence(word)) %>%
+    ungroup()
+
+tidybooks %>%
+    select(word, n_syllables)
+
+# Loading the rvest package
+# downloads data
+
+downloads = NULL
+titles = NULL
+####
+index <- 0
+####
+for (idx in 1:5){
+  ####
+  index <- index + 1
+  ###
+  webpage <- read_html(paste("https://www.gutenberg.org/ebooks/", idx, sep=""))
+  results <- webpage %>% html_nodes(".bibrec")
+  dat <- results %>% html_nodes("td")  %>% html_text()
+  dat <- strsplit(dat, "\n")
+  number <- grep(" downloads", dat)
+  result <- as.numeric(strsplit(dat[number][[1]][1]," ")[[1]][1])
+  downloads <- append(downloads, strsplit(dat[number][[1]][1], " ")[[1]][1])
+  titles <- append(titles, dat[[2]][2])
+  ####
+  large_dat[index,"Downloads"] <- result
+  ####
+}
+
+# 
+# download_data = data.frame(downloads = as.numeric(downloads), Title = titles)
+results <- left_join(tidybooks %>%
+                         group_by(title) %>%
+                         summarise(n_sentences = n_distinct(sentence)),
+                         tidybooks %>% 
+                         group_by(title) %>% 
+                         filter(n_syllables >= 3) %>% 
+                         summarise(n_polysyllables = n())) %>%
+    mutate(SMOG = 1.0430 * sqrt(30 * n_polysyllables/n_sentences) + 3.1291)
+
+sample_english_books <- results %>% 
+  left_join(sample_english_books, by = c("title" = "title")) %>% 
+  left_join(word_count_book) %>% 
+  na.omit()
+
+english_books_downloads_genre = read_csv("english_books_downloads_genre.csv")
+sample_english_books <- sample_english_books %>% 
+                        left_join(english_books_downloads_genre, 
+                                  by = c("gutenberg_id" = "gutenberg_id", 
+                                         "title" = "title")) %>% 
+                        na.omit()
+# Downloads~SMOG
+
+summary(lm(downloads ~ SMOG * genre, data=sample_english_books))
+
+ggplot(sample_english_books, aes(x = SMOG, y = as.numeric(downloads))) + 
+  geom_point(color = "blue") + 
+  geom_smooth(method = lm, se = TRUE)
+#+ geom_text(aes(label = title), position = position_jitter(), size = 3)
+
+
+large_dat <- large_dat %>% left_join(english_books_downloads_genre, 
+                                     by = c("title" = "title"))
+
+####
+count_outliers <- boxplot(large_dat$count, plot=FALSE)$out
+large_dat_1 <- large_dat[-which(large_dat$count %in% count_outliers), ]
+Downloads_outliers <- boxplot(large_dat_1$Downloads, plot=FALSE)$out
+large_dat_2 = large_dat_1
+if (sum(large_dat_1$Downloads %in% Downloads_outliers) != 0){
+  large_dat_2 <- large_dat_1[-which(large_dat_1$Downloads %in% Downloads_outliers), ]
+}
+
+
+# Count
+ggplot(large_dat_2, aes(x = count, y = Downloads)) + 
+  geom_point(color = "blue") + 
+  geom_smooth(method = lm, se = TRUE) 
+  
+
+lm.1 <- lm(Downloads~ count * genre, data=large_dat_2)
+plot(Downloads~count,
+     data=large_dat_2, 
+     main = "Relationship between downloads and word count") 
+abline(lm.1)
+summary(lm.1)
+MSE.lm.1 <- mean((lm.1$residuals)^2)
+print(MSE.lm.1)
+
+# Sentiment
+
+ggplot(large_dat_5, aes(x = emotion, y = as.numeric(Downloads))) + 
+  geom_point(color = "blue") + 
+  geom_smooth(method = lm, se = TRUE) 
+
+text_sentiment <- tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(title, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+large_dat_3 <- left_join(large_dat_2, text_sentiment)
+lm.2 <- lm(Downloads~negative * genre,data=large_dat_3)
+plot(Downloads~negative,data=large_dat_3,main="Relationship between downloads and negative sentiments")
+abline(lm.2)
+summary(lm.2)
+MSE.lm.2 <- mean((lm.2$residuals)^2)
+print(MSE.lm.2)
+
+lm.3 <- lm(Downloads~positive,data=large_dat_3)
+plot(Downloads~positive * genre,data=large_dat_3,main="Relationship between downloads and positive sentiments")
+abline(lm.3)
+summary(lm.3)
+MSE.lm.3 <- mean((lm.3$residuals)^2)
+print(MSE.lm.3)
+
+lm.4 <- lm(Downloads~sentiment*genre,data=large_dat_3)
+plot(Downloads~sentiment,data=large_dat_3,main="Relationship between downloads and total sentiments")
+abline(lm.4)
+summary(lm.4)
+MSE.lm.4 <- mean((lm.4$residuals)^2)
+print(MSE.lm.4)
+
+####
+
+afinn_score <- tidy_books %>% 
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(title) %>% 
+  summarise(afinn = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+
+large_dat_4 <- left_join(large_dat_3, afinn_score)
+lm.5 <- lm(Downloads~afinn * genre,data=large_dat_4)
+plot(Downloads~afinn,data=large_dat_4,main="Relationship between downloads and afinn score")
+abline(lm.5)
+summary(lm.5)
+MSE.lm.5 <- mean((lm.5$residuals)^2)
+print(MSE.lm.5)
+
+emotion_score <- tidy_books %>% 
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(title) %>% 
+  summarise(emotion = sum(abs(value))) %>% 
+  mutate(method = "AFINN")
+# emotion_score
+
+large_dat_5 <- left_join(large_dat_4, emotion_score)
+lm.6 <- lm(Downloads~emotion * genre,data=large_dat_5)
+plot(Downloads~emotion,data=large_dat_5,main="Relationship between downloads and emotion score")
+abline(lm.6)
+summary(lm.6)
+MSE.lm.6 <- mean((lm.6$residuals)^2)
+print(MSE.lm.6)
+```
+
+
+```{r}
+# seperate books into decades (author birthdate)
+library(rlist)
+author_data <- na.omit(data.frame("author" = as.character(gutenberg_authors$author), "birthdate" = gutenberg_authors$birthdate, "deathdate"= gutenberg_authors$deathdate))
+gutenberg_books <- na.omit(gutenberg_works())
+decades_data <- na.omit(left_join(gutenberg_books,author_data))
+min(decades_data$birthdate)
+max(decades_data$birthdate)
+groups = list()
+decades_data %>%
+  filter(birthdate <= 2014 & birthdate >= 1814)
+year_start <- 1814
+year_end <- year_start + 10
+for (group in 1:13) {
+  group_name <- paste("group",group,year_start,year_end,sep = "")
+  group_name <- decades_data %>%
+                      filter(birthdate < year_end & birthdate >= year_start)
+  groups <- list.append(groups, group_name)
+  year_start <- year_start+10
+  year_end <- year_start+10
+}
+
+
+group_idx = NULL
+for (group_idx in (1:13)){
+groups[[group_idx]]$decades_group = group_idx
+}
+groups[[13]]
+
+decades_data = rbind(groups[[1]], groups[[2]], groups[[3]], 
+                     groups[[4]],groups[[5]], groups[[6]],
+                     groups[[7]],groups[[8]], groups[[9]],
+                     groups[[7]],groups[[8]], groups[[9]], 
+                     groups[[10]], groups[[11]], groups[[12]], groups[[13]])
+
+# topics
+# https://cran.r-project.org/web/packages/tidytext/vignettes/topic_modeling.html
+
+library(topicmodels)
+
+tidy_books <- books %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+
+word_count_book <- tidy_books %>%
+  count(title, word, sort = TRUE) %>%
+  ungroup()
+
+book_dtm <- word_count_book %>%
+  cast_dtm(title, word, n)
+
+tidy_books
+# by_chapter_word
+word_count_book
+# word_counts
+
+k <- 14
+book_lda <- LDA(book_dtm, k = k, control = list(seed = 1234))
+book_lda
+
+book_topics <- tidy(book_lda, matrix = "beta")
+book_topics
+
+top_terms <- book_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+write.csv(top_terms[,1:2],row.names = FALSE)
+
+book_lda_gamma <- tidy(book_lda, matrix = "gamma")
+book_lda_gamma
+
+mean_decade_topic <- book_lda_gamma %>% 
+  left_join(decades_data, by = c("document" = "title")) %>% 
+  group_by(., decades_group, topic) %>% 
+  summarise(., mean_decade_topic_gamma = mean(gamma))
+
+book_lda_gamma <- book_lda_gamma %>%
+  left_join(decades_data, by = c("document" = "title"))
+
+dev_df <- merge(book_lda_gamma, mean_decade_topic,
+                by = c("topic", "decades_group"))
+
+class(dev_df$mean_decade_topic_gamma)
+
+large_dat
+dev_downloads <- dev_df %>% 
+  mutate(diff_per_topic = abs(gamma - mean_decade_topic_gamma)) %>%
+  group_by(., document) %>% 
+  summarise(., deviance = sum(diff_per_topic)) %>% 
+  left_join(large_dat, by = c("document" = "title")) %>% 
+  select(., deviance, Downloads)
+
+
+ggplot(dev_downloads, aes(x = deviance, y = Downloads)) + 
+  geom_point() + 
+  geom_smooth(method = lm)
+
+lm.7 <- lm(Downloads ~ deviance, data = dev_downloads)
+summary(lm.7)
+MSE.lm.7 <- mean((lm.7$residuals)^2)
+print(MSE.lm.7)
+
+top_terms[,1:2]
+
+```
+
+movies:
+```{r}
+# https://www.kaggle.com/rounakbanik/the-movies-dataset#movies_metadata.csv
+# Movies dataset including 5,000 movies released on or before July 2017
+# Source: Full MovieLens Dataset
+movies = read_csv("/Users/kailichen/Documents/Carnegie\ Mellon\ University/Audiobook/movies_metadata.csv")
+movies <- movies %>% 
+  group_by(., title) %>% 
+  summarise(., movie_count = n())
+sample_english_books <- sample_english_books %>% 
+  left_join(movies)
+sample_english_books[is.na(sample_english_books)] <- 0
+sample_english_books[!is.na(sample_english_books$movie_count)] <- 1
+
+boxplot_bookpopularity_movies<- ggplot(data = sample_english_books, 
+  aes(x = factor(movie_count), y = downloads)) + 
+  geom_boxplot() + 
+  labs(x = "Number of movies based on the book", 
+       y = "number of downloads", 
+       title = "Distribution of book downloads \nby movies") + 
+  scale_y_continuous(breaks = seq(0, 1000, 1)) + 
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+lm.8 <- lm(downloads ~ movie_count * SMOG + movie_count * genre + SMOG * genre, data = sample_english_books)
+summary(lm.8)
+MSE.lm.8 <- mean((lm.8$residuals)^2)
+print(MSE.lm.8)
+
+```
